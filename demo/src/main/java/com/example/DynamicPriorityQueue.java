@@ -3,6 +3,7 @@ package com.example;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.stream.Collector;
 import java.util.stream.Collectors;
 
 /**
@@ -11,85 +12,52 @@ import java.util.stream.Collectors;
  * Корнем очереди считается элемент с наименьшим приоритетом.
  * Элемент не может быть добавлен в очередь, если он уже находится в ней.
  */
-public class DynamicPriorityQueue<T> {
+public class DynamicPriorityQueue<T, I> {
     /**
      * Создает пустую очередь
      */
     public DynamicPriorityQueue()
     {
     }
-    /**
-     * Создает очередь с данными элементами
-     * Ключом словаря являются элементы, а значением: либо {@linkplain PriorityUpdater функция, возвращающая целое число}, либо целое число.
-     */
-    public DynamicPriorityQueue(Map<T, ?> priorities)
-    {
-        addAll(priorities);
-    }
 
 
     /**
      * Добавляет элемент в очередь
      * @return {@code true} если его еще нет, иначе {@code false}
      */
-    public boolean offer(T value, PriorityUpdater updater) // PriorityQueue
+    public boolean offer(T value, I identifier, PriorityUpdater updater) // PriorityQueue
     {
-        if (elements.containsKey(value))
+        if (elements.containsKey(identifier))
             return false;
-        var newNode = new Node(value, updater, new ArrayList<>());
-        elements.put(value, newNode);
-        root = meld(newNode, root);
+        insertNode(value, identifier, updater, updater.priority());
         return true;
     }
     /**
      * Добавляет элемент в очередь
      * @return {@code true} если его еще нет, иначе {@code false}
      */
-    public boolean add(T value, PriorityUpdater updater) // AbstractQueue
+    public boolean add(T value, I identifier, PriorityUpdater updater) // AbstractQueue
     {
-        return offer(value, updater);
+        return offer(value, identifier, updater);
     }
     /**
      * Добавляет элемент в очередь, со статическим приоритетом.
      * @return {@code true} если его еще нет, иначе {@code false}
      */
-    public boolean offer(T value, int priority) // PriorityQueue
+    public boolean offer(T value, I identifier, int priority) // PriorityQueue
     {
-        return offer(value, () -> priority);
-    }
-    /**
-     * Добавляет элемент в очередь, со статическим приоритетом.
-     * @return {@code true} если его еще нет, иначе {@code false}
-     */
-    public boolean add(T value, int priority) // PriorityQueue
-    {
-        return offer(value, () -> priority);
-    }
-
-    /**
-     * Добавляет все элементы из словаря в очередь
-     * Ключом словаря являются элементы, а значением: либо {@linkplain PriorityUpdater функция, возвращающая целое число}, либо целое число.
-     * @return {@code true} если хотя бы один был добавлен, иначе {@code false}
-     */
-    public boolean addAll(Map<T, ?> priorities)
-    {
-        if (priorities.isEmpty())
+        if (elements.containsKey(identifier))
             return false;
-        var res = false;
-        for (var entry : priorities.entrySet())
-        {
-            if (entry.getValue() instanceof PriorityUpdater pu)
-            {
-                offer(entry.getKey(), pu);
-                res = true;
-            }
-            else if (entry.getValue() instanceof Integer num)
-            {
-                offer(entry.getKey(), num);
-                res = true;
-            }
-        }
-        return res;
+        insertNode(value, identifier, null, priority);
+        return true;
+    }
+    /**
+     * Добавляет элемент в очередь, со статическим приоритетом.
+     * @return {@code true} если его еще нет, иначе {@code false}
+     */
+    public boolean add(T value, I identifier, int priority) // PriorityQueue
+    {
+        return offer(value, identifier, priority);
     }
 
     /**
@@ -122,8 +90,8 @@ public class DynamicPriorityQueue<T> {
         if (root == null)
             return null;
         var res = root.value;
-        elements.remove(res);
-        root = mergePairs(root.children);
+        elements.remove(root.identifier);
+        root = mergePairs(root.leftChild);
         return res;
     }
     /**
@@ -192,17 +160,13 @@ public class DynamicPriorityQueue<T> {
         var node = elements.get(o);
         if (node == null)
             return false;
+        if (node.updater == null)
+            return true;
         var newKey = node.updater.priority();
         if (newKey < node.key)
             decreaseKey(node, newKey);
         else if (newKey > node.key)
-        {
-            var updater = node.updater;
-            var val = node.value;
-            decreaseKey(node, Integer.MIN_VALUE);
-            poll();
-            offer(val, updater);
-        }
+            increaseKey(node, newKey);
         return true;
     }
 
@@ -211,31 +175,51 @@ public class DynamicPriorityQueue<T> {
      */
     public void updateAll()
     {
-        var elementMap = elements.entrySet().stream().collect(Collectors.toMap(entry -> entry.getKey(), entry -> entry.getValue().updater));
+        var nodeList = elements.values().stream().map(node -> new SimpleNode(node.value, node.identifier, node.updater, node.key)).collect(Collectors.toList());
         clear();
-        addAll(elementMap);
+        for (var node : nodeList)
+            insertNode(node.value, node.identifier, node.updater, node.updater == null ? node.key : node.updater.priority());
+    }
+    private class SimpleNode
+    {
+        private T value;
+        private int key;
+        private PriorityUpdater updater;
+        private I identifier;
+        public SimpleNode(T value, I identifier, PriorityUpdater updater, int key)
+        {
+            this.value = value;
+            this.updater = updater;
+            this.key = key;
+            this.identifier = identifier;
+        }
     }
 
     private class Node
     {
         private T value;
         private int key;
-        private ArrayList<Node> children;
         private PriorityUpdater updater;
-        private Node parent;
-        public Node(T value, PriorityUpdater updater, ArrayList<Node> children)
+        private Node leftChild;
+        private Node rightChild;
+        private Node nextNode;
+        private Node prevNode;
+        private boolean leftmost = true;
+        private boolean rightmost = true;
+        private I identifier;
+        public Node(T value, I identifier, PriorityUpdater updater, int key)
         {
             this.value = value;
             this.updater = updater;
-            this.children = children;
-            key = updater.priority();
+            this.key = key;
+            this.identifier = identifier;
         }
         public String toString()
         {
             return String.format("v: %s, k: %d", value, key);
         }
     }
-    private HashMap<T, Node> elements = new HashMap<>();
+    private HashMap<I, Node> elements = new HashMap<>();
     private Node root = null;
 
     // Вспомогательные методы
@@ -251,34 +235,55 @@ public class DynamicPriorityQueue<T> {
         if (elem2 == null)
             return elem1;
         // Иначе, добавляем более крупное как элемент меньшего
-        if (elem1.key < elem2.key)
+        if (elem2.key < elem1.key)
         {
-            elem1.children.add(elem2);
-            elem2.parent = elem1;
-            return elem1;
+            var temp = elem1;
+            elem1 = elem2;
+            elem2 = temp;
         }
-        elem2.children.add(elem1);
-        elem1.parent = elem2;
-        return elem2;
+        if (elem1.leftChild != null)
+        {
+            elem2.nextNode = elem1.leftChild;
+            elem2.nextNode.prevNode = elem2;
+            elem2.nextNode.leftmost = false;
+            elem2.rightmost = false;
+        }
+        else
+        {
+            elem1.rightChild = elem2;
+            elem2.nextNode = elem1;
+            elem2.rightmost = true;
+        }
+        elem2.prevNode = elem1;
+        elem1.leftChild = elem2;
+        elem2.leftmost = true;
+        return elem1;
     }
 
     /**
      *  Слияние деревьев парами
      */
-    private Node mergePairs(ArrayList<Node> list)
+    private Node mergePairs(Node node)
     {
-        if (list.isEmpty())
+        if (node == null)
             return null;
-        if (list.size() == 1)
-        {
-            list.get(0).parent = null;
-            return list.get(0);
-        }
-        var node1 = list.removeFirst();
-        var node2 = list.removeFirst();
-        node1.parent = null;
-        node2.parent = null;
-        return meld(meld(node1, node2), mergePairs(list));
+        node.prevNode = null;
+        Node nextNode = node.rightmost ? null : node.nextNode;
+        node.nextNode = null;
+        node.leftmost = true;
+        node.rightmost = true;
+        return mergePairs(node, nextNode);
+    }
+    private Node mergePairs(Node node1, Node node2)
+    {
+        if (node2 == null)
+            return node1;
+        node2.prevNode = null;
+        Node nextNode = node2.rightmost ? null : node2.nextNode;
+        node2.nextNode = null;
+        node2.leftmost = true;
+        node2.rightmost = true;
+        return meld(meld(node1, node2), mergePairs(nextNode));
     }
 
     /**
@@ -286,13 +291,87 @@ public class DynamicPriorityQueue<T> {
      */
     private void decreaseKey(Node node, int newVal)
     {
-        if (node.key == newVal)
-            return;
         node.key = newVal;
-        if (node.parent == null)
+        if (node == root)
             return;
-        node.parent.children.remove(node);
-        node.parent = null;
+        if (!node.leftmost && !node.rightmost)
+        {
+            node.prevNode.nextNode = node.nextNode;
+            node.nextNode.prevNode = node.prevNode;
+        }
+        else if (!node.leftmost)
+        {
+            node.prevNode.nextNode = node.nextNode;
+            node.prevNode.rightmost = true;
+            node.nextNode.rightChild = node.prevNode;
+        }
+        else if (!node.rightmost)
+        {
+            node.nextNode.prevNode = node.prevNode;
+            node.nextNode.leftmost = true;
+            node.prevNode.leftChild = node.nextNode;
+        }
+        else
+        {
+            node.prevNode.leftChild = null;
+            node.nextNode.rightChild = null;
+        }
+        node.prevNode = null;
+        node.nextNode = null;
+        node.leftmost = true;
+        node.rightmost = true;
         root = meld(root, node);
+    }
+
+    private void increaseKey(Node node, int newKey)
+    {
+        if (node == root)
+        {
+            var prio = node.updater;
+            var val = node.value;
+            var id = node.identifier;
+            poll();
+            insertNode(val, id, prio, newKey);
+            return;
+        }
+        node.key = newKey;
+        if (node.leftChild == null)
+            return;
+        node.leftChild.prevNode = node.prevNode;
+        node.rightChild.nextNode = node.nextNode;
+        if (node.leftmost)
+            node.prevNode.leftChild = node.leftChild;
+        else
+        {
+            node.leftChild.leftmost = false;
+            node.prevNode.nextNode = node.leftChild;
+            node.leftmost = true;
+        }
+        if (node.rightmost)
+            node.nextNode.rightChild = node.rightChild;
+        else
+        {
+            node.rightChild.rightmost = false;
+            node.nextNode.prevNode = node.rightChild;
+            node.rightmost = true;
+        }
+        node.prevNode = null;
+        node.nextNode = null;
+        node.leftChild = null;
+        node.rightChild = null;
+        root = meld(node, root);
+    }
+
+    private Node insertNode(T value, I identifier, PriorityUpdater updater, int key)
+    {
+        var newNode = new Node(value, identifier, updater, key);
+        root = meld(newNode, root);
+        elements.put(identifier, newNode);
+        return newNode;
+    }
+
+    public String toString()
+    {
+        return String.format("head: %s, elements: %s", root, elements);
     }
 }
