@@ -6,7 +6,7 @@ import java.util.Random;
 
 import org.junit.jupiter.api.Test;
 
-import com.example.DynamicPriorityQueue;
+import ru.sfedu.DynamicPriorityQueue;
 
 import static org.junit.jupiter.api.Assertions.*;
 

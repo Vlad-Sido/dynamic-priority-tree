@@ -1,4 +1,4 @@
-package com.example;
+package ru.sfedu;
 
 /**
  * Представитель приоритета, функциональный интерфейс.

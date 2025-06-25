@@ -1,4 +1,4 @@
-package ru.sfedu.DynamicPriorityQueue;
+package ru.sfedu;
 
 import java.util.ArrayList;
 import java.util.HashMap;
